@@ -1,57 +1,54 @@
 package com.martinmimigames.simplefileexplorer;
 
-import static android.Manifest.permission.READ_EXTERNAL_STORAGE;
-import static android.Manifest.permission.WRITE_EXTERNAL_STORAGE;
-
 import android.app.Activity;
 import android.app.Dialog;
 import android.content.Intent;
 import android.content.res.Resources;
-import android.graphics.Bitmap;
-import android.graphics.BitmapFactory;
 import android.graphics.Color;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.StatFs;
-import android.util.TypedValue;
+import android.text.Editable;
+import android.text.TextWatcher;
 import android.view.View;
-import android.widget.Button;
-import android.widget.EditText;
-import android.widget.ImageView;
-import android.widget.LinearLayout;
-import android.widget.TextView;
+import android.widget.*;
+import com.martinmimigames.simplefileexplorer.view.ItemView;
+import mg.utils.clipboard.v1.ClipBoard;
+import mg.utils.helper.MainThread;
+import mg.utils.notify.ToastHelper;
 
 import java.io.File;
 import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Comparator;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
-import mg.utils.clipboard.v1.ClipBoard;
-import mg.utils.notify.ToastHelper;
+import static android.Manifest.permission.READ_EXTERNAL_STORAGE;
+import static android.Manifest.permission.WRITE_EXTERNAL_STORAGE;
 
 public class MainActivity extends Activity {
   private static final int ONGOING_OPERATION_ID = Integer.MAX_VALUE;
   private static final int LOADING_VIEW_ID = Integer.MAX_VALUE - 1;
-  private static final String FILE_PATH_FLAG = "file path";
   private static final int HIGHLIGHT_COLOR = 0xFF00A4C9;
   private final ShortTabOnButton shortTabOnButton;
   private final LongPressOnButton longPressOnButton;
   private final ArrayList<File> currentSelectedFiles;
   private final ExecutorService executor;
   private final FileOpener fopen;
-  private final State appState;
+  private final AppState currentState;
+
+  private boolean allowHiddenFileDisplay;
   private int hasOperations;
-  private LinearLayout ll;
+  private LinearLayout mainListView;
   private int width;
-  private Bitmap fileImage, pictureImage, audioImage, videoImage, unknownImage, archiveImage, folderImage;
-  private String filePath;
-  private File parent;
   private boolean isCut, isCopy;
   private PermissionManager permissionManager;
   private Dialog openListDialog;
   private Dialog deleteConfirmationDialog;
   private Dialog createDirectoryDialog;
   private Dialog renameDialog;
+  private final Preferences preferences;
 
   public MainActivity() {
     shortTabOnButton = new ShortTabOnButton();
@@ -59,7 +56,9 @@ public class MainActivity extends Activity {
     currentSelectedFiles = new ArrayList<>(3);
     executor = Executors.newCachedThreadPool();
     fopen = new FileOpener(this);
-    appState = new State();
+    currentState = new AppState();
+
+    preferences = new Preferences();
 
     hasOperations = 0;
   }
@@ -80,6 +79,14 @@ public class MainActivity extends Activity {
   protected void onCreate(final Bundle savedInstanceState) {
     super.onCreate(savedInstanceState);
     setContentView(R.layout.activity_main);
+
+    preferences.onCreate(this);
+
+    var save = preferences.getSharedPreferences();
+    allowHiddenFileDisplay = save.getBoolean(Preferences.TOGGLE_HIDDEN_KEY, false);
+    currentState.filePath = save.getString(Preferences.FILE_PATH_KEY, null);
+    currentState.sorterName = save.getString(Preferences.SORTER_KEY, AppState.Sorters.ASCENDING_NAME_SORTER_TAG);
+
     permissionManager = new PermissionManager(this);
 
     Intent intent = getIntent();
@@ -91,23 +98,13 @@ public class MainActivity extends Activity {
       default -> fopen.isRequestDocument = false;
     }
 
-    ll = findViewById(R.id.list);
+    mainListView = findViewById(R.id.list);
 
-    setupBitmaps();
+    width = Resources.getSystem().getDisplayMetrics().widthPixels;
     setupUI();
 
-    if (savedInstanceState != null) {
-      filePath = savedInstanceState.getString(FILE_PATH_FLAG);
-    }
-
-    // jump start app state
-    appState.current.start();
-  }
-
-  @Override
-  public void onSaveInstanceState(Bundle savedInstanceState) {
-    super.onSaveInstanceState(savedInstanceState);
-    savedInstanceState.putString(FILE_PATH_FLAG, filePath);
+    // default app state is idle state
+    currentState.changeTo(AppState.Mode.IDLE);
   }
 
   @Override
@@ -115,9 +112,9 @@ public class MainActivity extends Activity {
     super.onStart();
 
     executor.execute(() -> {
-      if (filePath != null) {
+      if (currentState.filePath != null) {
         if (checkPermission())
-          listItem(filePath);
+          listItem(currentState.filePath);
       } else {
         for (File folder : FileOperation.getAllStorages(this)) {
           if (checkPermission()) listItem(folder);
@@ -130,7 +127,15 @@ public class MainActivity extends Activity {
   @Override
   protected void onStop() {
     super.onStop();
-    appState.change(appState.idle);
+    currentState.changeTo(AppState.Mode.IDLE);
+
+    var saveEditor = preferences.getSharedPreferences().edit();
+    saveEditor.putBoolean(Preferences.TOGGLE_HIDDEN_KEY, allowHiddenFileDisplay);
+    saveEditor.putString(Preferences.FILE_PATH_KEY, currentState.filePath);
+
+    saveEditor.putString(Preferences.SORTER_KEY, currentState.sorterName);
+
+    saveEditor.commit();
   }
 
   private boolean checkPermission() {
@@ -145,11 +150,14 @@ public class MainActivity extends Activity {
     listItem(new File(path));
   }
 
-  /** flag for calling a directory list update */
+  /**
+   * flag for calling a directory list update
+   */
   private boolean needDirectoryUpdate;
 
   /**
    * Update the directory list, displaying the folder provided.
+   *
    * @param folder the folder to display contents of
    */
   private void updateDirectoryView(File folder) {
@@ -159,8 +167,8 @@ public class MainActivity extends Activity {
     if (Build.VERSION.SDK_INT >= 9) {
       StatFs stat = new StatFs(folder.getPath());
       long bytesAvailable = Build.VERSION.SDK_INT >= 18 ?
-        stat.getBlockSizeLong() * stat.getAvailableBlocksLong() :
-        (long) stat.getBlockSize() * stat.getAvailableBlocks();
+          stat.getBlockSizeLong() * stat.getAvailableBlocksLong() :
+          (long) stat.getBlockSize() * stat.getAvailableBlocks();
       info += "Available size: " + FileOperation.getReadableMemorySize(bytesAvailable) + "\n";
       if (Build.VERSION.SDK_INT >= 18) {
         bytesAvailable = stat.getTotalBytes();
@@ -169,8 +177,8 @@ public class MainActivity extends Activity {
     }
     final String finalInfo = info;
     runOnUiThread(() -> {
-      ll.removeAllViews();
-      ((TextView) findViewById(R.id.title)).setText(filePath);
+      mainListView.removeAllViews();
+      ((TextView) findViewById(R.id.title)).setText(currentState.filePath);
       addDialog(finalInfo, 16);
 
       // create process indicator
@@ -181,21 +189,29 @@ public class MainActivity extends Activity {
     });
 
     // update variables for current path and parent
-    parent = folder.getParentFile();
-    filePath = folder.getPath();
+    currentState.parent = folder.getParentFile();
+    currentState.filePath = folder.getPath();
 
     if (folderAccessible(folder)) {
-      final File[] items = folder.listFiles();
+      final File[] items = folder.listFiles((file) -> allowHiddenFileDisplay || !file.isHidden());
 
       // directory updated
       needDirectoryUpdate = false;
 
       assert items != null;
-      sort(items);
+
+      Arrays.sort(items, switch (currentState.sorterName) {
+        case AppState.Sorters.DESCENDING_NAME_SORTER_TAG -> AppState.Sorters.DESCENDING_NAME;
+        case AppState.Sorters.ASCENDING_MODIFIED_TIME_SORTER_TAG -> AppState.Sorters.ASCENDING_MODIFIED_TIME;
+        case AppState.Sorters.DESCENDING_MODIFIED_TIME_SORTER_TAG -> AppState.Sorters.DESCENDING_MODIFIED_TIME;
+        //case AppState.Sorters.ASCENDING_NAME_SORTER_TAG -> AppState.Sorters.ASCENDING_NAME;
+        default -> AppState.Sorters.ASCENDING_NAME;
+      });
+
+      //sort(items);
       if (items.length == 0) {
         addDialog("Empty folder!", 16);
       } else {
-        String lastLetter = "";
 
         // print folders items
         boolean hasFolders = false;
@@ -205,11 +221,6 @@ public class MainActivity extends Activity {
               addDialog("Folders:", 18);
               hasFolders = true;
             }
-            if (item.getName().substring(0, 1)
-              .compareToIgnoreCase(lastLetter) > 0) {
-              lastLetter = item.getName().substring(0, 1).toUpperCase();
-              addDialog(lastLetter, 16);
-            }
             // if need to update, immediate return to avoid unwanted writing the list from concurrency
             if (needDirectoryUpdate) {
               return;
@@ -217,7 +228,6 @@ public class MainActivity extends Activity {
             addDirectory(item);
           }
         }
-        lastLetter = "";
 
         // print file items
         boolean hasFiles = false;
@@ -227,38 +237,48 @@ public class MainActivity extends Activity {
               addDialog("Files:", 18);
               hasFiles = true;
             }
-            if (item.getName().substring(0, 1)
-              .compareToIgnoreCase(lastLetter) > 0) {
-              lastLetter = item.getName().substring(0, 1).toUpperCase();
-              addDialog(lastLetter, 16);
-            }
             // if need to update, immediate return to avoid unwanted writing the list from concurrency
             if (needDirectoryUpdate) {
               return;
             }
             switch (FileProvider.getFileType(item).split("/")[0]) {
-              case "image" -> addItem(getImageView(pictureImage), item);
-              case "video" -> addItem(getImageView(videoImage), item);
-              case "audio" -> addItem(getImageView(audioImage), item);
+              case "image" -> addItem(getImageView(R.drawable.picture), item);
+              case "video" -> addItem(getImageView(R.drawable.video), item);
+              case "audio" -> addItem(getImageView(R.drawable.audio), item);
               case "application" -> {
                 if (FileProvider.getFileType(item).contains("application/octet-stream"))
-                  addItem(getImageView(unknownImage), item);
+                  addItem(getImageView(R.drawable.unknown), item);
                 else
-                  addItem(getImageView(archiveImage), item);
+                  addItem(getImageView(R.drawable.archive), item);
               }
-              case "text" -> addItem(getImageView(fileImage), item);
-              default -> addItem(getImageView(unknownImage), item);
+              case "text" -> addItem(getImageView(R.drawable.file), item);
+              default -> addItem(getImageView(R.drawable.unknown), item);
             }
           }
+
+        filter();
       }
+
+
     } else {
       // apps are not allowed to access these folders due to permissions in Android 11
-      if (filePath.contains("Android/data") || filePath.contains("Android/obb")) {
+      if (currentState.filePath.contains("Android/data") || currentState.filePath.contains("Android/obb")) {
         addDialog("For android 11 or higher, Android/data and Android/obb is refused access.\n", 16);
       } else addDialog("Access Denied", 16);
     }
-    runOnUiThread(() -> ll.removeView(findViewById(LOADING_VIEW_ID)));
-  };
+    runOnUiThread(() -> mainListView.removeView(findViewById(LOADING_VIEW_ID)));
+  }
+
+  /**
+   * filter through each item using filter text entered in filter bar
+   */
+  private void filter() {
+    var filter = ((TextView) findViewById(R.id.filter)).getText().toString().toLowerCase();
+    runOnUiThread(() -> {
+      forEachItem(item -> item.setVisibility(item.file.getName().toLowerCase().contains(filter) ? View.VISIBLE : View.GONE));
+    });
+  }
+
   private void listItem(final File folder) {
     // update flag, helps avoid concurrent list update
     if (!needDirectoryUpdate) {
@@ -275,27 +295,11 @@ public class MainActivity extends Activity {
     tv.setTextSize(textSize);
     tv.setId(id);
 
-    runOnUiThread(() -> ll.addView(tv));
+    runOnUiThread(() -> mainListView.addView(tv));
   }
 
   private void addDialog(final String dialog, final int textSize) {
     addIdDialog(dialog, textSize, View.NO_ID);
-  }
-
-  private void sort(final File[] items) {
-    // for every item
-    for (int i = 0; i < items.length; i++) {
-      // j = for every next item
-      for (int j = i + 1; j < items.length; j++) {
-        // if larger than next
-        if (items[i].toString()
-          .compareToIgnoreCase(items[j].toString()) > 0) {
-          File temp = items[i];
-          items[i] = items[j];
-          items[j] = temp;
-        }
-      }
-    }
   }
 
   //return true if can read
@@ -308,16 +312,16 @@ public class MainActivity extends Activity {
   }
 
   private void addDirectory(final File folder) {
-    addItem(getImageView(folderImage), folder);
+    addItem(getImageView(R.drawable.folder), folder);
   }
 
   private void addItem(final ImageView imageView, final File file) {
-    new Item(imageView, file);
+    new ItemView(this, mainListView, imageView, file, width, shortTabOnButton, longPressOnButton);
   }
 
-  private ImageView getImageView(final Bitmap bitmap) {
+  private ImageView getImageView(int imageId) {
     final ImageView imageView = new ImageView(this);
-    imageView.setImageBitmap(bitmap);
+    imageView.setImageResource(imageId);
     final int width10 = width / 8;
     imageView.setAdjustViewBounds(true);
     imageView.setScaleType(ImageView.ScaleType.FIT_CENTER);
@@ -336,18 +340,14 @@ public class MainActivity extends Activity {
       currentSelectedFiles.remove(file);
       view.setBackgroundColor(Color.TRANSPARENT);
     }
-    switch (currentSelectedFiles.size()){
+    switch (currentSelectedFiles.size()) {
       case 1 -> {
-        appState.change(appState.select);
+        currentState.changeTo(AppState.Mode.SELECT);
         setViewVisibility(R.id.single_select_operation, View.VISIBLE);
       }
-      case 0 -> appState.change(appState.idle);
+      case 0 -> currentState.changeTo(AppState.Mode.IDLE);
       default -> setViewVisibility(R.id.single_select_operation, View.GONE);
     }
-  }
-
-  private void clearHighlight() {
-    forEachItem(item -> item.setBackgroundColor(Color.TRANSPARENT));
   }
 
   @Override
@@ -362,9 +362,9 @@ public class MainActivity extends Activity {
    * @return false if failed, else true
    */
   boolean returnToParent() {
-    if (parent == null || !folderAccessible(parent))
+    if (currentState.parent == null || !folderAccessible(currentState.parent))
       return false;
-    listItem(parent);
+    listItem(currentState.parent);
     return true;
   }
 
@@ -375,22 +375,72 @@ public class MainActivity extends Activity {
       final View menuList = findViewById(R.id.menu_list);
       if (menuList.isShown()) {
         menuList.setVisibility(View.GONE);
-        if (appState.current == appState.select)
+        if (currentState.mode == AppState.Mode.SELECT)
           setViewVisibility(R.id.quick_selection, View.VISIBLE);
       } else {
         menuList.setVisibility(View.VISIBLE);
         setViewVisibility(R.id.quick_selection, View.GONE);
       }
     });
+
+    ((EditText) findViewById(R.id.filter)).addTextChangedListener(new TextWatcher() {
+
+      @Override
+      public void beforeTextChanged(CharSequence s, int start, int count, int after) {
+
+      }
+
+      @Override
+      public void onTextChanged(CharSequence s, int start, int before, int count) {
+
+      }
+
+      @Override
+      public void afterTextChanged(Editable s) {
+        filter();
+      }
+    });
   }
 
   private void setupMenu() {
     setViewVisibility(R.id.menu_list, View.GONE);
+
+    findViewById(R.id.menu_toggle_hidden)
+        .setOnClickListener(v -> {
+          allowHiddenFileDisplay = !allowHiddenFileDisplay;
+          listItem(currentState.filePath);
+          setViewVisibility(R.id.menu_list, View.GONE);
+        });
+
+    findViewById(R.id.menu_sorter)
+        .setOnClickListener(v -> {
+          switch (currentState.sorterName) {
+            case AppState.Sorters.ASCENDING_NAME_SORTER_TAG -> {
+              currentState.sorterName = AppState.Sorters.DESCENDING_NAME_SORTER_TAG;
+              listItem(currentState.filePath);
+            }
+            case AppState.Sorters.DESCENDING_NAME_SORTER_TAG -> {
+              currentState.sorterName = AppState.Sorters.ASCENDING_MODIFIED_TIME_SORTER_TAG;
+              listItem(currentState.filePath);
+            }
+            case AppState.Sorters.ASCENDING_MODIFIED_TIME_SORTER_TAG -> {
+              currentState.sorterName = AppState.Sorters.DESCENDING_MODIFIED_TIME_SORTER_TAG;
+              listItem(currentState.filePath);
+            }
+            case AppState.Sorters.DESCENDING_MODIFIED_TIME_SORTER_TAG -> {
+              currentState.sorterName = AppState.Sorters.ASCENDING_NAME_SORTER_TAG;
+              listItem(currentState.filePath);
+            }
+          }
+          ((TextView) v).setText(currentState.sorterName);
+        });
+    ((TextView) findViewById(R.id.menu_sorter)).setText(currentState.sorterName);
+
     findViewById(R.id.menu_create_new_directory)
-      .setOnClickListener(v -> {
-        createDirectoryDialog.show();
-        setViewVisibility(R.id.menu_list, View.GONE);
-      });
+        .setOnClickListener(v -> {
+          createDirectoryDialog.show();
+          setViewVisibility(R.id.menu_list, View.GONE);
+        });
 
     // ensure drive list is not visible by default
     // visibility state is required
@@ -398,43 +448,40 @@ public class MainActivity extends Activity {
     storageList.setVisibility(View.GONE);
 
     findViewById(R.id.menu_quick_switch)
-      .setOnClickListener(v -> {
-        setViewVisibility(R.id.menu_list, View.GONE);
+        .setOnClickListener(v -> {
+          setViewVisibility(R.id.menu_list, View.GONE);
 
-        // update storage list
+          // update storage list
 
-        storageList.removeAllViews();
-        var storages = FileOperation.getAllStorages(this);
-        for (var file : storages) {
-          // skip unreadable folders
-          if (!file.canRead()) continue;
+          storageList.removeAllViews();
+          var storages = FileOperation.getAllStorages(this);
+          for (var file : storages) {
+            // skip unreadable folders
+            if (!file.canRead()) continue;
 
-          var entry = new Button(this);
-          entry.setLayoutParams(
-            new LinearLayout.LayoutParams(
-              LinearLayout.LayoutParams.MATCH_PARENT,
-              LinearLayout.LayoutParams.WRAP_CONTENT
-            )
-          );
-          entry.setText(file.getPath());
-          entry.setOnClickListener(v2 -> {
-            listItem(file);
-            setViewVisibility(R.id.drive_list, View.GONE);
-          });
-          storageList.addView(entry);
-        }
+            var entry = new Button(this);
+            entry.setLayoutParams(
+                new LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT
+                )
+            );
+            entry.setText(file.getPath());
+            entry.setOnClickListener(v2 -> {
+              listItem(file);
+              setViewVisibility(R.id.drive_list, View.GONE);
+            });
+            storageList.addView(entry);
+          }
 
-        if (storageList.isShown())
-          storageList.setVisibility(View.GONE);
-        else
-          storageList.setVisibility(View.VISIBLE);
-      });
+          storageList.setVisibility((storageList.isShown()) ? View.GONE : View.VISIBLE);
+        });
   }
 
   private void setupSingleSelectMenu() {
     findViewById(R.id.single_select_copy_path).setOnClickListener(v -> {
       copyFilePath();
-      appState.change(appState.idle);
+      currentState.changeTo(AppState.Mode.IDLE);
     });
 
     findViewById(R.id.single_select_rename).setOnClickListener(v -> {
@@ -446,11 +493,11 @@ public class MainActivity extends Activity {
   private void setupSelectMenu() {
     findViewById(R.id.select_cut).setOnClickListener(v -> {
       isCut = true;
-      appState.change(appState.paste);
+      currentState.changeTo(AppState.Mode.PASTE);
     });
     findViewById(R.id.select_copy).setOnClickListener(v -> {
       isCopy = true;
-      appState.change(appState.paste);
+      currentState.changeTo(AppState.Mode.PASTE);
     });
 
     findViewById(R.id.select_delete).setOnClickListener(v -> {
@@ -464,25 +511,25 @@ public class MainActivity extends Activity {
       ((TextView) deleteConfirmationDialog.findViewById(R.id.delete_list)).setText(list.toString());
       deleteConfirmationDialog.show();
     });
-    findViewById(R.id.select_cancel).setOnClickListener(v -> appState.change(appState.idle));
+    findViewById(R.id.select_cancel).setOnClickListener(v -> currentState.changeTo(AppState.Mode.IDLE));
 
     findViewById(R.id.select_all)
-      .setOnClickListener(v -> forEachItem(item -> {
-          if (!currentSelectedFiles.contains(item.file)) {
-            selectFiles(item.file, item);
-          }
-        })
-      );
+        .setOnClickListener(v -> forEachItem(item -> {
+              if (!currentSelectedFiles.contains(item.file)) {
+                selectFiles(item.file, item);
+              }
+            })
+        );
 
     findViewById(R.id.invert_select_all)
-      .setOnClickListener(v -> forEachItem(item -> selectFiles(item.file, item)));
+        .setOnClickListener(v -> forEachItem(item -> selectFiles(item.file, item)));
 
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.DONUT) {
       findViewById(R.id.share_selected)
-        .setOnClickListener(v -> {
-          fopen.share(getSelectedFiles());
-          appState.change(appState.idle);
-        });
+          .setOnClickListener(v -> {
+            fopen.share(getSelectedFiles());
+            currentState.changeTo(AppState.Mode.IDLE);
+          });
     } else {
       setViewVisibility(R.id.share_selected, View.GONE);
     }
@@ -490,16 +537,16 @@ public class MainActivity extends Activity {
 
   private void setupPasteMenu() {
     findViewById(R.id.paste_paste)
-      .setOnClickListener(v -> executor.execute(() -> {
+        .setOnClickListener(v -> executor.execute(() -> {
           final int currentOperation = hasOperations + 1;
           hasOperations = currentOperation;
           if (findViewById(ONGOING_OPERATION_ID) != null)
             setViewVisibility(ONGOING_OPERATION_ID, View.VISIBLE);
 
           var selectedFiles = getSelectedFiles();
-          var dst = filePath;
+          var dst = currentState.filePath;
 
-          appState.change(appState.idle);
+          currentState.changeTo(AppState.Mode.IDLE);
 
           if (isCut) {
             for (var file : selectedFiles) {
@@ -516,19 +563,22 @@ public class MainActivity extends Activity {
           if (findViewById(ONGOING_OPERATION_ID) != null)
             setViewVisibility(ONGOING_OPERATION_ID, View.GONE);
 
-          listItem(filePath);
+          listItem(currentState.filePath);
         }));
-    findViewById(R.id.paste_cancel).setOnClickListener(v -> appState.change(appState.idle));
+    findViewById(R.id.paste_cancel).setOnClickListener(v -> currentState.changeTo(AppState.Mode.IDLE));
   }
 
   private void setViewVisibility(int id, int visibility) {
     runOnUiThread(() -> findViewById(id).setVisibility(visibility));
   }
 
-  private void copyFilePath(){
+  /**
+   * Copies the selected file's file path and place in clipboard.
+   */
+  private void copyFilePath() {
     ClipBoard.copyText(this, currentSelectedFiles.get(0).getAbsolutePath());
     ToastHelper.showShort(this, "copied path");
-    appState.change(appState.idle);
+    currentState.changeTo(AppState.Mode.IDLE);
   }
 
   private void setupOpenListDialogue() {
@@ -537,14 +587,20 @@ public class MainActivity extends Activity {
     openListDialog.findViewById(R.id.open_list_open).setOnClickListener(v -> {
       openListDialog.dismiss();
       fopen.open(currentSelectedFiles.get(0));
-      appState.change(appState.idle);
+      currentState.changeTo(AppState.Mode.IDLE);
+    });
+
+    openListDialog.findViewById(R.id.open_list_share).setOnClickListener(v -> {
+      openListDialog.dismiss();
+      fopen.share(getSelectedFiles());
+      currentState.changeTo(AppState.Mode.IDLE);
     });
 
     openListDialog.findViewById(R.id.open_list_cancel).setOnClickListener(v -> {
       openListDialog.dismiss();
-      appState.change(appState.idle);
+      currentState.changeTo(AppState.Mode.IDLE);
     });
-    openListDialog.setOnCancelListener(d -> appState.change(appState.idle));
+    openListDialog.setOnCancelListener(d -> currentState.changeTo(AppState.Mode.IDLE));
   }
 
   File[] getSelectedFiles() {
@@ -556,24 +612,24 @@ public class MainActivity extends Activity {
     renameDialog.setTitle("Rename File/Folder");
     renameDialog.setContentView(R.layout.rename_confirmation);
     renameDialog.findViewById(R.id.rename_rename)
-      .setOnClickListener(
-        v -> {
-          renameDialog.dismiss();
-          String name = ((EditText) renameDialog.findViewById(R.id.new_name)).getText().toString();
-          File src = currentSelectedFiles.get(0);
-          File dst = new File(src.getParent(), name);
-          FileOperation.move(src, dst);
-          appState.change(appState.idle);
-          listItem(filePath);
-        }
-      );
+        .setOnClickListener(
+            v -> {
+              renameDialog.dismiss();
+              String name = ((EditText) renameDialog.findViewById(R.id.new_name)).getText().toString();
+              File src = currentSelectedFiles.get(0);
+              File dst = new File(src.getParent(), name);
+              FileOperation.move(src, dst);
+              currentState.changeTo(AppState.Mode.IDLE);
+              listItem(currentState.filePath);
+            }
+        );
     renameDialog.findViewById(R.id.rename_cancel)
-      .setOnClickListener(
-        v -> {
-          renameDialog.dismiss();
-          appState.change(appState.idle);
-        }
-      );
+        .setOnClickListener(
+            v -> {
+              renameDialog.dismiss();
+              currentState.changeTo(AppState.Mode.IDLE);
+            }
+        );
   }
 
   private void setupDeleteDialog() {
@@ -589,19 +645,19 @@ public class MainActivity extends Activity {
         final int currentOperation = hasOperations + 1;
         hasOperations = currentOperation;
         var selectedFiles = getSelectedFiles();
-        appState.change(appState.idle);
+        currentState.changeTo(AppState.Mode.IDLE);
         for (var file : selectedFiles)
           FileOperation.delete(file);
         if (hasOperations == currentOperation)
           hasOperations = 0;
         if (findViewById(ONGOING_OPERATION_ID) != null)
           setViewVisibility(ONGOING_OPERATION_ID, View.GONE);
-        listItem(filePath);
+        listItem(currentState.filePath);
       });
     });
     deleteConfirmationDialog.findViewById(R.id.delete_cancel).setOnClickListener(v -> {
       deleteConfirmationDialog.dismiss();
-      appState.change(appState.idle);
+      currentState.changeTo(AppState.Mode.IDLE);
     });
   }
 
@@ -612,10 +668,10 @@ public class MainActivity extends Activity {
     createDirectoryDialog.findViewById(R.id.new_directory_cancel).setOnClickListener(v -> createDirectoryDialog.dismiss());
     createDirectoryDialog.findViewById(R.id.new_directory_create).setOnClickListener(v -> {
       var name = ((EditText) createDirectoryDialog.findViewById(R.id.new_directory_name)).getText().toString();
-      var folder = new File(filePath, name);
+      var folder = new File(currentState.filePath, name);
       if (!folder.exists()) {
         folder.mkdirs();
-        listItem(filePath);
+        listItem(currentState.filePath);
       } else {
         ToastHelper.showShort(this, "Folder already exists");
       }
@@ -623,113 +679,97 @@ public class MainActivity extends Activity {
     });
   }
 
-  private void setupBitmaps() {
-    width = Resources.getSystem().getDisplayMetrics().widthPixels;
-    folderImage = BitmapFactory.decodeResource(getResources(),
-      R.drawable.folder);
-    fileImage = BitmapFactory.decodeResource(getResources(),
-      R.drawable.file);
-    archiveImage = BitmapFactory.decodeResource(getResources(),
-      R.drawable.archive);
-    audioImage = BitmapFactory.decodeResource(getResources(),
-      R.drawable.audio);
-    videoImage = BitmapFactory.decodeResource(getResources(),
-      R.drawable.video);
-    pictureImage = BitmapFactory.decodeResource(getResources(),
-      R.drawable.picture);
-    unknownImage = BitmapFactory.decodeResource(getResources(),
-      R.drawable.unknown);
-  }
-
-  private void forEachItem(ForEachItemFunction forEachItemFunction) {
+  /**
+   * Loop call function for each entry item stored in mainListView.
+   * Must be called in uiThread to avoid threading issues.
+   *
+   * @param forEachItemFunctionalInterface function to be run against each item in mainListView
+   */
+  private void forEachItem(ForEachItemFunctionalInterface forEachItemFunctionalInterface) {
     View v;
-    for (int i = ll.getChildCount() - 1; i >= 0; i--) {
-      v = ll.getChildAt(i);
-      if (v instanceof Item)
-        forEachItemFunction.forEachItem((Item) v);
+    for (int i = 0; i < mainListView.getChildCount(); i++) {
+      v = mainListView.getChildAt(i);
+      if (v instanceof ItemView item)
+        forEachItemFunctionalInterface.forEachItem(item);
     }
   }
 
-  private interface ForEachItemFunction {
-    void forEachItem(Item item);
+  /**
+   * functional interface for forEachItem
+   */
+  private interface ForEachItemFunctionalInterface {
+    void forEachItem(ItemView item);
   }
 
-  private class State {
+  private class AppState {
 
-    State current, idle, select, paste, openFile;
+    private String sorterName;
 
-    private State(boolean ignored) {
+    private String filePath;
+    private File parent;
+    byte mode;
+
+    static final class Sorters {
+      static final Comparator<File> ASCENDING_NAME = (f1, f2) -> f1.getName().compareToIgnoreCase(f2.getName());
+      static final String ASCENDING_NAME_SORTER_TAG = "A-z";
+      static final Comparator<File> DESCENDING_NAME = (f1, f2) -> ASCENDING_NAME.compare(f2, f1);
+      static final String DESCENDING_NAME_SORTER_TAG = "z-A";
+
+      static final Comparator<File> DESCENDING_MODIFIED_TIME = (f1, f2) -> Math.toIntExact(Math.max(Math.min(f1.lastModified() - f2.lastModified(), 1), -1));
+      static final String DESCENDING_MODIFIED_TIME_SORTER_TAG = "By oldest";
+      static final Comparator<File> ASCENDING_MODIFIED_TIME = (f1, f2) -> DESCENDING_MODIFIED_TIME.compare(f2, f1);
+      static final String ASCENDING_MODIFIED_TIME_SORTER_TAG = "By earliest";
     }
 
-    State() {
-      idle = new State(true) {
-        @Override
-        void start() {
-          setViewVisibility(R.id.paste_operation, View.GONE);
-          setViewVisibility(R.id.select_operation, View.GONE);
-          setViewVisibility(R.id.quick_selection, View.GONE);
-          setViewVisibility(R.id.single_select_operation, View.GONE);
-          clearHighlight();
-          currentSelectedFiles.clear();
+    static final class Mode {
+
+      static final byte IDLE = 0;
+      static final byte SELECT = 1;
+      static final byte PASTE = 2;
+      static final byte OPEN_FILE = 3;
+    }
+
+    void enterIdle() {
+      setViewVisibility(R.id.paste_operation, View.GONE);
+      setViewVisibility(R.id.select_operation, View.GONE);
+      setViewVisibility(R.id.quick_selection, View.GONE);
+      setViewVisibility(R.id.single_select_operation, View.GONE);
+      forEachItem(item -> item.setBackgroundColor(Color.TRANSPARENT));
+      currentSelectedFiles.clear();
+    }
+
+    void enterSelect() {
+      setViewVisibility(R.id.paste_operation, View.GONE);
+      setViewVisibility(R.id.select_operation, View.VISIBLE);
+      setViewVisibility(R.id.quick_selection, View.VISIBLE);
+      setViewVisibility(R.id.menu_list, View.GONE);
+    }
+
+    void enterPaste() {
+      setViewVisibility(R.id.select_operation, View.GONE);
+      setViewVisibility(R.id.quick_selection, View.GONE);
+      setViewVisibility(R.id.paste_operation, View.VISIBLE);
+      setViewVisibility(R.id.single_select_operation, View.GONE);
+    }
+
+    void enterOpenFile() {
+      // empty
+    }
+
+    AppState() {
+      mode = Mode.IDLE;
+    }
+
+    public void changeTo(byte state) {
+      mode = state;
+      MainThread.run(() -> {
+        switch (state) {
+          case Mode.SELECT -> enterSelect();
+          case Mode.PASTE -> enterPaste();
+          case Mode.OPEN_FILE -> enterOpenFile();
+          // case idle -> enterIdle();
+          default -> enterIdle();
         }
-      };
-
-      select = new State(true) {
-        @Override
-        void start() {
-          setViewVisibility(R.id.paste_operation, View.GONE);
-          setViewVisibility(R.id.select_operation, View.VISIBLE);
-          setViewVisibility(R.id.quick_selection, View.VISIBLE);
-          setViewVisibility(R.id.menu_list, View.GONE);
-        }
-      };
-
-      paste = new State(true) {
-        @Override
-        void start() {
-          setViewVisibility(R.id.select_operation, View.GONE);
-          setViewVisibility(R.id.quick_selection, View.GONE);
-          setViewVisibility(R.id.paste_operation, View.VISIBLE);
-          setViewVisibility(R.id.single_select_operation, View.GONE);
-        }
-      };
-
-      openFile = new State(true);
-      current = idle;
-    }
-
-    void start() {
-    }
-
-    public void change(State state) {
-      current = state;
-      MainActivity.this.runOnUiThread(current::start);
-    }
-  }
-
-  class Item extends LinearLayout {
-    final File file;
-
-    private Item(final ImageView imageView, final File file) {
-      super(MainActivity.this);
-
-      this.file = file;
-      this.setClickable(true);
-      this.setOnClickListener(shortTabOnButton);
-      this.setOnLongClickListener(longPressOnButton);
-
-      final TextView textView = new TextView(MainActivity.this);
-      textView.setText(file.getName());
-      textView.setTextColor(Color.WHITE);
-      textView.setBackgroundColor(Color.TRANSPARENT);
-      textView.setWidth(width - (width / 8));
-      textView.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16); //material list title
-
-      this.setLayoutParams(new LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT));
-      runOnUiThread(() -> {
-        this.addView(imageView);
-        this.addView(textView);
-        ll.addView(this);
       });
     }
   }
@@ -737,12 +777,12 @@ public class MainActivity extends Activity {
   private class ShortTabOnButton implements View.OnClickListener {
     @Override
     public void onClick(final View view) {
-      final File file = ((Item) view).file;
+      final File file = ((ItemView) view).file;
       if (!checkPermission())
         return;
 
       if (file.isDirectory()) {
-        if (appState.current == appState.select) {
+        if (currentState.mode == AppState.Mode.SELECT) {
           selectFiles(file, view);
         } else {
           listItem(file);
@@ -750,8 +790,8 @@ public class MainActivity extends Activity {
       }
 
       if (file.isFile()) {
-        if (appState.current == appState.idle) {
-          appState.change(appState.openFile);
+        if (currentState.mode == AppState.Mode.IDLE) {
+          currentState.changeTo(AppState.Mode.OPEN_FILE);
 
           currentSelectedFiles.clear();
           currentSelectedFiles.add(file);
@@ -759,7 +799,7 @@ public class MainActivity extends Activity {
           openListDialog.setTitle(file.getName());
           openListDialog.show();
 
-        } else if (appState.current == appState.select) {
+        } else if (currentState.mode == AppState.Mode.SELECT) {
           selectFiles(file, view);
         }
       }
@@ -770,9 +810,9 @@ public class MainActivity extends Activity {
     @Override
     public boolean onLongClick(final View view) {
       if (fopen.isRequestDocument) return true;
-      if (appState.current == appState.idle || appState.current == appState.select) {
-        appState.change(appState.select);
-        final File file = ((Item) view).file;
+      if (currentState.mode == AppState.Mode.IDLE || currentState.mode == AppState.Mode.SELECT) {
+        currentState.changeTo(AppState.Mode.SELECT);
+        final File file = ((ItemView) view).file;
         selectFiles(file, view);
       }
       return true;

@@ -2,16 +2,11 @@ package com.martinmimigames.simplefileexplorer;
 
 import android.content.Context;
 import android.os.Build;
-import android.util.Log;
 
-import java.io.File;
-import java.io.FileInputStream;
-import java.io.FileOutputStream;
-import java.io.IOException;
-import java.io.InputStream;
-import java.io.OutputStream;
+import java.io.*;
 import java.nio.file.Files;
 import java.nio.file.Paths;
+import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
 import java.util.Objects;
 
@@ -27,7 +22,7 @@ public class FileOperation {
         pathArray.add(new File(path.substring(0, path.lastIndexOf("/Android/") + 1)).getAbsoluteFile());
       }
       paths = new File[pathArray.size()];
-      for (int i = 0; i < pathArray.size(); i++){
+      for (int i = 0; i < pathArray.size(); i++) {
         paths[i] = pathArray.get(i);
       }
       return paths;
@@ -89,17 +84,22 @@ public class FileOperation {
     // copy data inside file
     if (src.isFile()) {
       try {
-        final InputStream in = new FileInputStream(src);
-        final OutputStream out = new FileOutputStream(dst);
 
-        // Transfer bytes from in to out
-        byte[] buf = new byte[1024];
-        int len;
-        while ((len = in.read(buf)) > 0) {
-          out.write(buf, 0, len);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+          Files.copy(src.toPath(), dst.toPath(), StandardCopyOption.COPY_ATTRIBUTES);
+        } else {
+          final InputStream in = new FileInputStream(src);
+          final OutputStream out = new FileOutputStream(dst);
+
+          // Transfer bytes from in to out
+          byte[] buf = new byte[1024];
+          int len;
+          while ((len = in.read(buf)) > 0) {
+            out.write(buf, 0, len);
+          }
+          in.close();
+          out.close();
         }
-        in.close();
-        out.close();
         return true;
       } catch (IOException ignored) {
       } // fall through and return false;

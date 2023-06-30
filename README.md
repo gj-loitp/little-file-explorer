@@ -1,5 +1,7 @@
 # Little File Explorer
 
+![Icon](docs/images/icon.png)
+
 [![Read License](https://img.shields.io/github/license/martinmimigames/little-file-explorer?style=flat-square)](https://github.com/martinmimigames/little-file-explorer/blob/main/LICENSE.md)
 
 [![Code Quality](https://img.shields.io/codefactor/grade/github/martinmimigames/little-file-explorer/main?style=flat-square)](https://www.codefactor.io/repository/github/martinmimigames/little-file-explorer)
@@ -21,17 +23,32 @@ Previous known as *Simple File Explorer* (but from martinmimigames).
 Location of website:
 [https://martinmimigames.github.io/projects/little-file-explorer](https://martinmimigames.github.io/projects/little-file-explorer/index.html).
 
+## Screenshots
+
+![Screenshot 1](docs/images/example1.jpg)
+
 ## Features
 
 - Free
 - Small (< 40 KB)
 - Basic file operations (Cut, copy, paste, rename, delete)
+- File name filter
+- Name and Modified Time sort
 - Easy switch between sdcard and internal storage
 - Multi-share function
 - File/folder path copying
 - Minimum permissions
 
 ## Latest Versions
+
+- v4.10
+  - Added "toggle hidden" option (available in menu button)
+  - Added File/Folder name filtering (available on top bar)
+  - Added display sorting (name, last modified time) (available in menu button)
+  - Added file path remembering on app exit
+  - Re-added share button in open list options
+  - Fixed delete confirmation screen being full screen
+
 - v4.9
   - Fixed sticky selection state after leaving app
   - Fixed concurrent directory list modification
@@ -76,15 +93,17 @@ Issues and pull requests are always welcome!
 You can submit issues the following ways:
 
 - via [Github Issues](https://github.com/martinmimigames/little-file-explorer/issues)
-- via email: martinmimigames@gmail.com
+- via email: <martinmimigames@gmail.com>
 
 ## Installation
 
-[<img src="https://fdroid.gitlab.io/artwork/badge/get-it-on.png"
+[<img src="https://martinmimigames.github.io/res/get-it-on/f-droid.png"
      alt="Get it on F-Droid"
      height="80">](https://f-droid.org/packages/com.martinmimigames.simplefileexplorer/)
 
-[Get it from Github](https://github.com/martinmimigames/little-file-explorer/releases/latest).
+[<img src="https://martinmimigames.github.io/res/get-it-on/github.png"
+     alt="Get it on Github"
+     height="80">](https://github.com/martinmimigames/little-file-explorer/releases/latest)
 
 [Get it from the official website](https://martinmimigames.github.io/projects/little-file-explorer)
 
@@ -94,7 +113,7 @@ Official Website at [https://martinmimigames.github.io](https://martinmimigames.
 
 ### Last update of README
 
-Date : 25-04-2023 dd-mm-yyyy
+Date : 23-06-2023 dd-mm-yyyy
 
 ### Important
 
