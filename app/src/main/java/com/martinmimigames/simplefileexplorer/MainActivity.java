@@ -673,11 +673,12 @@ public class MainActivity extends Activity {
                             ToastHelper.showShort(this, "copied MD5");
                         });
                         detailsDialog.findViewById(R.id.details_md5_check).setOnClickListener((b2) -> {
-                            if (ClipBoard.getClipboardText(this).equalsIgnoreCase(md5hash)) {
-                                ToastHelper.showLong(this, "MD5 matches");
-                            } else {
-                                ToastHelper.showLong(this, "MD5 does not match");
-                            }
+                            //TODO roy93~
+//                            if (ClipBoard.getClipboardText(this).equalsIgnoreCase(md5hash)) {
+//                                ToastHelper.showLong(this, "MD5 matches");
+//                            } else {
+//                                ToastHelper.showLong(this, "MD5 does not match");
+//                            }
                         });
                     });
                 });
