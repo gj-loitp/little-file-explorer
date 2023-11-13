@@ -38,8 +38,32 @@ Location of website:
 - Multi-share function
 - File/folder path copying
 - Minimum permissions
+- Dark/light theme toggle
+- md5 checksum generation and verification
 
 ## Latest Versions
+
+- v4.13
+  - Fixed # in file name error
+  - Added follow system dark mode
+  - Fixed crash when open details of large files
+  - Fixed error when empty clipboard
+  - Now clear filter when entering/exiting folder
+  - Added invalid name warning when creating/renaming files
+
+- v4.12
+  - added md5 checksum calculation and verification (details page)
+  - theme is now toggle-based (burger menu)
+  - app now forget last path (feature reverted)
+  
+- v4.11
+  - Fix crashing if last exited on a non-existing folder
+  - Fix unable to exit folders with access denied
+  - Added details page for files
+  - Added light mode (follows system settings)
+  - Added sorting by file size
+  - Moved storage info to the bottom
+  - Added slight padding to dialogs
 
 - v4.10
   - Added "toggle hidden" option (available in menu button)
@@ -113,7 +137,7 @@ Official Website at [https://martinmimigames.github.io](https://martinmimigames.
 
 ### Last update of README
 
-Date : 23-06-2023 dd-mm-yyyy
+Date : 10-07-2023 dd-mm-yyyy
 
 ### Important
 
